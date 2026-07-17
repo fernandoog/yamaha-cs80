@@ -54,14 +54,9 @@ python main.py --midi-port "nombre del puerto"
 
 ### Visualizador OpenGL (botón VIZ GL)
 
-- **1–5** — resolución (800×600 · 720p · 1600×900 · 1080p · nativa)
-- **← →** o **R** — ciclar resolución
-- **F** — pantalla completa (cubre todo el monitor)
-- **H** — mostrar / ocultar ayuda
-- **SPACE** — cambiar efecto al azar
-- **ESC** — salir de fullscreen / cerrar
-
-Efectos: spectrum bars, osciloscopio, túnel, plasma, partículas, starfield, flor, grid, anillos.
+Elige el **monitor** en el desplegable junto a VIZ GL (se detectan automáticamente).
+Se abre a **pantalla completa** en la resolución nativa de ese monitor.
+Los efectos rotan solos. **ESC** cierra la ventana.
 
 ## Estructura
 

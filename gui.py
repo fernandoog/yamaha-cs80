@@ -14,7 +14,7 @@ from typing import Callable, Optional
 from audio_engine import AudioEngine, BLOCK_SIZE, SAMPLE_RATE
 from effects import EffectParams
 from presets import get_preset, list_presets, load_preset
-from gl_visualizer import OPENGL_OK, get_viz_bus, launch_visualizer, stop_visualizer
+from gl_visualizer import OPENGL_OK, get_viz_bus, launch_visualizer, list_monitors, stop_visualizer
 from quality import QUALITY_PROFILES, SoundQuality, get_profile, list_qualities
 from random_patch import random_patch
 from sequencer import ArpMode
@@ -666,6 +666,21 @@ class CS80GUI:
             relief=tk.FLAT, padx=12, pady=6, command=self._toggle_visualizer,
         )
         self.viz_btn.pack(side=tk.RIGHT, padx=4)
+        self._viz_monitors = list_monitors() if OPENGL_OK else []
+        mon_labels = [m.label for m in self._viz_monitors] or ["Monitor 1"]
+        self._viz_monitor_var = tk.StringVar(value=mon_labels[0])
+        self.viz_monitor_combo = ttk.Combobox(
+            transport,
+            textvariable=self._viz_monitor_var,
+            values=mon_labels,
+            state="readonly",
+            width=28,
+            font=FONT_SMALL,
+        )
+        self.viz_monitor_combo.pack(side=tk.RIGHT, padx=4)
+        tk.Label(
+            transport, text="VIZ →", font=FONT_SMALL, fg=TEXT_DIM, bg=BG_DARK,
+        ).pack(side=tk.RIGHT)
 
     def _build_piano(self, parent) -> None:
         frame = tk.Frame(parent, bg=BG_DARK)
@@ -923,12 +938,33 @@ class CS80GUI:
         def _on_viz_close() -> None:
             self.root.after(0, self._viz_closed_from_thread)
 
+        # Refrescar lista por si se conectó/desconectó un monitor
+        self._viz_monitors = list_monitors()
+        labels = [m.label for m in self._viz_monitors] or ["Monitor 1"]
+        self.viz_monitor_combo["values"] = labels
+        cur = self._viz_monitor_var.get()
+        if cur not in labels:
+            self._viz_monitor_var.set(labels[0])
+        display_index = 0
         try:
-            self._viz, self._viz_bus = launch_visualizer(on_close=_on_viz_close)
-            self.viz_btn.config(text="■  VIZ OFF", bg=NEON_ORANGE)
-            self.status_label.config(
-                text="[ VIZ ]  1-5 resolución  |  F fullscreen  |  SPACE efecto  |  H ayuda"
+            display_index = labels.index(self._viz_monitor_var.get())
+        except ValueError:
+            display_index = 0
+
+        mon = (
+            self._viz_monitors[display_index]
+            if self._viz_monitors and 0 <= display_index < len(self._viz_monitors)
+            else None
+        )
+        try:
+            self._viz, self._viz_bus = launch_visualizer(
+                on_close=_on_viz_close,
+                display_index=display_index,
+                monitor=mon,
             )
+            mon_txt = mon.label if mon else f"Monitor {display_index + 1}"
+            self.viz_btn.config(text="■  VIZ OFF", bg=NEON_ORANGE)
+            self.status_label.config(text=f"[ VIZ ]  {mon_txt}  ·  ESC para cerrar")
         except Exception as exc:
             messagebox.showerror("OpenGL", str(exc))
 
