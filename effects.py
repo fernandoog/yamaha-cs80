@@ -144,6 +144,7 @@ class EffectChain:
         self.delay = DelayEffect(sample_rate)
         self.reverb = ReverbEffect(sample_rate)
         self.params = EffectParams()
+        self.quality_depth = 1.0
 
     @staticmethod
     def _bitcrush(samples: np.ndarray, bits: float, mix: float) -> np.ndarray:
@@ -155,9 +156,10 @@ class EffectChain:
 
     def process(self, samples: np.ndarray) -> np.ndarray:
         p = self.params
+        depth = np.clip(self.quality_depth, 0.3, 1.0)
         dry = samples.astype(np.float64, copy=False)
         wet = self._bitcrush(dry, p.bitcrush_bits, p.bitcrush_mix)
-        wet = self.chorus.process(wet, p.chorus_rate, p.chorus_depth, p.chorus_mix)
-        wet = self.delay.process(wet, p.delay_time, p.delay_feedback, p.delay_mix)
-        wet = self.reverb.process(wet, p.reverb_size, p.reverb_mix)
+        wet = self.chorus.process(wet, p.chorus_rate, p.chorus_depth, p.chorus_mix * depth)
+        wet = self.delay.process(wet, p.delay_time, p.delay_feedback, p.delay_mix * depth)
+        wet = self.reverb.process(wet, p.reverb_size, p.reverb_mix * depth)
         return np.clip(wet, -1.0, 1.0)

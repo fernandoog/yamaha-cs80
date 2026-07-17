@@ -53,6 +53,43 @@ class WaveGenerator:
     def noise(num_samples: int, rng: np.random.Generator) -> np.ndarray:
         return rng.uniform(-1.0, 1.0, num_samples)
 
+    @staticmethod
+    def _polyblep(phase: np.ndarray, phase_inc: np.ndarray) -> np.ndarray:
+        """Corrección PolyBLEP para suavizar aliasing en bordes de onda."""
+        t = phase
+        dt = np.maximum(phase_inc, 1e-9)
+        out = np.zeros_like(t)
+        mask1 = t < dt
+        t1 = t[mask1] / dt[mask1]
+        out[mask1] = t1 + t1 - t1 * t1 - 1.0
+        mask2 = t > 1.0 - dt
+        t2 = (t[mask2] - 1.0) / dt[mask2]
+        out[mask2] = t2 * t2 + t2 + t2 + 1.0
+        return out
+
+    @staticmethod
+    def saw_aa(phase: np.ndarray, phase_inc) -> np.ndarray:
+        """Diente de sierra con antialiasing PolyBLEP."""
+        if np.isscalar(phase_inc):
+            inc = np.full_like(phase, float(phase_inc))
+        else:
+            inc = np.asarray(phase_inc, dtype=np.float64)
+        return WaveGenerator.saw(phase) - WaveGenerator._polyblep(phase, inc)
+
+    @staticmethod
+    def square_aa(phase: np.ndarray, phase_inc, duty: float = 0.5) -> np.ndarray:
+        """Cuadrada con antialiasing PolyBLEP."""
+        if np.isscalar(phase_inc):
+            inc = np.full_like(phase, float(phase_inc))
+        else:
+            inc = np.asarray(phase_inc, dtype=np.float64)
+        t2 = (phase + duty) % 1.0
+        return (
+            np.where(phase < duty, 1.0, -1.0)
+            + WaveGenerator._polyblep(phase, inc)
+            - WaveGenerator._polyblep(t2, inc)
+        )
+
 
 class AudioEngine:
     """
@@ -80,6 +117,29 @@ class AudioEngine:
     def list_devices() -> None:
         """Lista dispositivos de audio disponibles (útil para depuración)."""
         print(sd.query_devices())
+
+    def configure(self, sample_rate: int, block_size: int) -> bool:
+        """
+        Cambia sample rate / buffer. Si el audio está activo, reinicia el stream.
+        Devuelve True si el stream quedó activo de nuevo.
+        """
+        was_running = self._running
+        callback = self._callback_fn
+        if was_running:
+            self.stop()
+        self.sample_rate = int(sample_rate)
+        self.block_size = int(block_size)
+        if was_running and callback is not None:
+            try:
+                self.start(callback)
+            except Exception:
+                # Reintento con valores seguros
+                self.sample_rate = SAMPLE_RATE
+                self.block_size = BLOCK_SIZE
+                self.start(callback)
+                raise
+            return True
+        return False
 
     def start(self, callback_fn: Callable[[int], np.ndarray]) -> None:
         """

@@ -13,6 +13,7 @@ import numpy as np
 
 from audio_engine import WaveGenerator, midi_to_freq
 from effects import EffectChain, EffectParams
+from quality import QualityProfile, SoundQuality, get_profile
 from sequencer import ArpMode, Arpeggiator
 from step_sequencer import StepSequencer
 
@@ -243,11 +244,15 @@ class CS80Voice:
         self._amp_env = ADSR(self.params.amp_env, sample_rate)
         self._filter_env = ADSR(self.params.filter_env, sample_rate)
         self._filter = StateVariableFilter()
+        self.antialias = False
 
     def apply_params(self, params: SynthParams) -> None:
         self.params = params
         self._amp_env.params = params.amp_env
         self._filter_env.params = params.filter_env
+
+    def set_quality(self, antialias: bool) -> None:
+        self.antialias = antialias
 
     def set_aftertouch(self, value: float) -> None:
         self.aftertouch = np.clip(value, 0.0, 1.0)
@@ -297,9 +302,17 @@ class CS80Voice:
             new_phase = (phase + float(np.sum(inc))) % 1.0
 
         if waveform == Waveform.SAW:
-            samples = WaveGenerator.saw(phases)
+            samples = (
+                WaveGenerator.saw_aa(phases, phase_inc)
+                if self.antialias
+                else WaveGenerator.saw(phases)
+            )
         elif waveform == Waveform.SQUARE:
-            samples = WaveGenerator.square(phases)
+            samples = (
+                WaveGenerator.square_aa(phases, phase_inc)
+                if self.antialias
+                else WaveGenerator.square(phases)
+            )
         elif waveform == Waveform.SINE:
             samples = WaveGenerator.sine(phases)
         elif waveform == Waveform.TRIANGLE:
@@ -441,6 +454,34 @@ class CS80Synth:
         self._arp_voice_note: Optional[int] = None
         self._seq_voice_note: Optional[int] = None
         self.global_aftertouch = 0.0
+        self.quality = get_profile(SoundQuality.STANDARD)
+        self._apply_quality_flags()
+
+    def _apply_quality_flags(self) -> None:
+        q = self.quality
+        self.effects.quality_depth = q.effect_depth
+        for voice in self.voices:
+            voice.set_quality(q.antialias)
+
+    def apply_quality(self, level: SoundQuality | int) -> QualityProfile:
+        """Aplica un perfil de calidad. Reinicia voces si cambia el sample rate."""
+        profile = get_profile(level)
+        old_rate = self.sample_rate
+        self.quality = profile
+        if profile.sample_rate != old_rate:
+            held = list(self._held_notes)
+            params = self.params
+            self.sample_rate = profile.sample_rate
+            self.voices = [CS80Voice(self.sample_rate) for _ in range(self.NUM_VOICES)]
+            self.effects = EffectChain(self.sample_rate)
+            self.apply_params(params)
+            self._held_notes = []
+            self._arp_voice_note = None
+            self._seq_voice_note = None
+            for note in held:
+                self.note_on(note, 100)
+        self._apply_quality_flags()
+        return profile
 
     def apply_params(self, params: Optional[SynthParams] = None) -> None:
         if params is not None:
@@ -455,6 +496,7 @@ class CS80Synth:
         self.step_sequencer.swing = self.params.seq_swing
         for voice in self.voices:
             voice.apply_params(self.params)
+        self._apply_quality_flags()
 
     def set_ribbon(self, value: float) -> None:
         self.params.ribbon = np.clip(value, -1.0, 1.0)
@@ -602,6 +644,14 @@ class CS80Synth:
 
         mix *= self.params.volume
         mix = self.effects.process(mix)
+
+        q = self.quality
+        if q.soft_saturate:
+            # Saturación suave tipo cinta — más musical que un clip duro
+            mix = np.tanh(mix * 1.15) * 0.92
+        if q.dither:
+            mix = mix + (np.random.default_rng().uniform(-1.0, 1.0, num_samples) * (1.0 / 65536.0))
+
         mix = np.clip(mix, -1.0, 1.0)
 
         mono = mix.astype(np.float32)

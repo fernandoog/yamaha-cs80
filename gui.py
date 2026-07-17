@@ -14,6 +14,7 @@ from typing import Callable, Optional
 from audio_engine import AudioEngine, BLOCK_SIZE, SAMPLE_RATE
 from effects import EffectParams
 from presets import get_preset, list_presets, load_preset
+from quality import QUALITY_PROFILES, SoundQuality, get_profile, list_qualities
 from random_patch import random_patch
 from sequencer import ArpMode
 from session_io import load_session, list_builtin_patterns, save_session
@@ -167,6 +168,75 @@ class StepSequencerUI(tk.Frame):
             bg = KEY_ACTIVE if step.enabled and step.accent else (NEON_BLUE if step.enabled else NEON_DIM)
             fg = BG_DARK if step.enabled else TEXT_DIM
             btn.config(text=label, bg=bg, fg=fg)
+
+
+class QualityLadder(tk.Frame):
+    """
+    Selector de calidad: Básica → Profesional.
+    Aspecto de medidor neón — un clic, sin jerga técnica.
+    """
+
+    def __init__(self, parent, on_change, initial: SoundQuality = SoundQuality.STANDARD) -> None:
+        super().__init__(parent, bg=BG_DARK)
+        self.on_change = on_change
+        self.level = int(initial)
+        self._btns: list[tk.Button] = []
+        self._build()
+
+    def _build(self) -> None:
+        top = tk.Frame(self, bg=BG_DARK)
+        top.pack(fill=tk.X)
+        tk.Label(
+            top, text="CALIDAD", font=FONT_SMALL, fg=TEXT_DIM, bg=BG_DARK,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        rail = tk.Frame(top, bg=BG_DARK)
+        rail.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        profiles = list_qualities()
+        for i, profile in enumerate(profiles):
+            btn = tk.Button(
+                rail,
+                text=profile.label.upper(),
+                font=(FONT_FAMILY, 8, "bold"),
+                relief=tk.FLAT,
+                bd=0,
+                padx=10,
+                pady=4,
+                cursor="hand2",
+                takefocus=0,
+                command=lambda idx=i: self.set_level(idx, notify=True),
+            )
+            btn.pack(side=tk.LEFT, padx=2)
+            self._btns.append(btn)
+            if i < len(profiles) - 1:
+                tk.Label(rail, text="·", font=FONT_SMALL, fg=NEON_DIM, bg=BG_DARK).pack(side=tk.LEFT)
+
+        self.hint = tk.Label(self, text="", font=FONT_SMALL, fg=TEXT_DIM, bg=BG_DARK, anchor="w")
+        self.hint.pack(fill=tk.X, pady=(4, 0))
+        self._refresh()
+
+    def set_level(self, level: int, notify: bool = False) -> None:
+        self.level = max(0, min(4, int(level)))
+        self._refresh()
+        if notify:
+            self.on_change(SoundQuality(self.level))
+
+    def _refresh(self) -> None:
+        profiles = list_qualities()
+        for i, btn in enumerate(self._btns):
+            profile = profiles[i]
+            active = i == self.level
+            if active:
+                btn.config(bg=profile.color, fg=BG_DARK, activebackground=profile.color)
+            else:
+                btn.config(bg=NEON_DIM, fg=TEXT_DIM, activebackground=NEON_ORANGE, activeforeground=BG_DARK)
+        profile = profiles[self.level]
+        rate_k = profile.sample_rate / 1000.0
+        self.hint.config(
+            text=f"  {profile.hint}   ·   {rate_k:g} kHz  ·  buffer {profile.block_size}",
+            fg=profile.color,
+        )
 
 
 def show_splash(root: tk.Tk) -> None:
@@ -375,6 +445,7 @@ class CS80GUI:
         self._build_seq_panel(tab_seq)
         self._build_misc_panel(tab_misc)
         self._build_preset_panel(self.root)
+        self._build_quality_panel(self.root)
         self._build_transport(self.root)
         self._build_piano(self.root)
 
@@ -528,6 +599,43 @@ class CS80GUI:
         ttk.Combobox(frame, textvariable=self.preset_var, values=list_presets(), width=24, state="readonly").pack(side=tk.LEFT, padx=8)
         for text, cmd in [("LOAD", self._load_preset), ("SAVE", self._save_preset), ("DEMO", self._play_demo), ("SEQ DEMO", self._play_seq_demo)]:
             tk.Button(frame, text=text, font=FONT_LABEL, fg=BG_DARK, bg=NEON_BLUE, relief=tk.FLAT, padx=10, command=cmd).pack(side=tk.LEFT, padx=3)
+
+    def _build_quality_panel(self, parent) -> None:
+        frame = tk.Frame(parent, bg=BG_DARK, highlightbackground=NEON_DIM, highlightthickness=1)
+        frame.pack(fill=tk.X, padx=12, pady=(2, 6))
+        inner = tk.Frame(frame, bg=BG_DARK)
+        inner.pack(fill=tk.X, padx=10, pady=8)
+        initial = getattr(self.synth, "quality", get_profile(SoundQuality.STANDARD)).level
+        self.quality_ladder = QualityLadder(inner, self._on_quality_change, initial=initial)
+        self.quality_ladder.pack(fill=tk.X)
+
+    def _on_quality_change(self, level: SoundQuality) -> None:
+        was_running = self.engine.is_running
+        if was_running:
+            self.engine.stop()
+            self.synth.all_notes_off()
+
+        profile = self.synth.apply_quality(level)
+        try:
+            self.engine.configure(profile.sample_rate, profile.block_size)
+        except Exception as exc:
+            # Fallback si el dispositivo no soporta 96 kHz, etc.
+            fallback = get_profile(SoundQuality.HIGH if level > SoundQuality.HIGH else SoundQuality.STANDARD)
+            self.synth.apply_quality(fallback.level)
+            self.engine.configure(fallback.sample_rate, fallback.block_size)
+            self.quality_ladder.set_level(int(fallback.level), notify=False)
+            self.status_label.config(text=f"[ CALIDAD ]  Dispositivo no soporta {profile.label} → {fallback.label}  ({exc})")
+            if was_running:
+                self.engine.start(self._audio_callback)
+                self.audio_btn.config(text="■  STOP AUDIO", bg=NEON_ORANGE)
+            return
+
+        if was_running:
+            self.engine.start(self._audio_callback)
+            self.audio_btn.config(text="■  STOP AUDIO", bg=NEON_ORANGE)
+            self.status_label.config(text=f"[ CALIDAD ]  {profile.label}  ·  audio reiniciado")
+        else:
+            self.status_label.config(text=f"[ CALIDAD ]  {profile.label}  ·  lista al iniciar audio")
 
     def _build_transport(self, parent) -> None:
         transport = tk.Frame(parent, bg=BG_DARK)
