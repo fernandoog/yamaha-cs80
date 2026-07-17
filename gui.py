@@ -14,6 +14,7 @@ from typing import Callable, Optional
 from audio_engine import AudioEngine, BLOCK_SIZE, SAMPLE_RATE
 from effects import EffectParams
 from presets import get_preset, list_presets, load_preset
+from gl_visualizer import OPENGL_OK, get_viz_bus, launch_visualizer, stop_visualizer
 from quality import QUALITY_PROFILES, SoundQuality, get_profile, list_qualities
 from random_patch import random_patch
 from sequencer import ArpMode
@@ -338,6 +339,8 @@ class CS80GUI:
         self.on_close = on_close
         self._keys_pressed: set[str] = set()
         self._sliders: dict[str, BladeRunnerScale] = {}
+        self._viz = None
+        self._viz_bus = None
 
         self.root = tk.Tk()
         self.root.title("YAMAHA CS-80  //  BLADE RUNNER SYNTH  v3")
@@ -658,6 +661,11 @@ class CS80GUI:
             transport, text="■  ALL OFF", font=FONT_LABEL, fg=TEXT_PRIMARY, bg=NEON_DIM,
             relief=tk.FLAT, padx=12, pady=6, command=self.synth.all_notes_off,
         ).pack(side=tk.LEFT, padx=4)
+        self.viz_btn = tk.Button(
+            transport, text="◈  VIZ GL", font=FONT_LABEL, fg=BG_DARK, bg=NEON_BLUE,
+            relief=tk.FLAT, padx=12, pady=6, command=self._toggle_visualizer,
+        )
+        self.viz_btn.pack(side=tk.RIGHT, padx=4)
 
     def _build_piano(self, parent) -> None:
         frame = tk.Frame(parent, bg=BG_DARK)
@@ -896,9 +904,51 @@ class CS80GUI:
         except ValueError as exc:
             messagebox.showerror("Export", str(exc))
 
+    def _toggle_visualizer(self) -> None:
+        if self._viz is not None and self._viz.is_running:
+            stop_visualizer()
+            self._viz = None
+            self._viz_bus = None
+            self.viz_btn.config(text="◈  VIZ GL", bg=NEON_BLUE)
+            self.status_label.config(text="[ VIZ ]  Ventana OpenGL cerrada")
+            return
+
+        if not OPENGL_OK:
+            messagebox.showerror(
+                "OpenGL",
+                "Faltan dependencias.\n\npip install pygame PyOpenGL PyOpenGL-accelerate",
+            )
+            return
+
+        def _on_viz_close() -> None:
+            self.root.after(0, self._viz_closed_from_thread)
+
+        try:
+            self._viz, self._viz_bus = launch_visualizer(on_close=_on_viz_close)
+            self.viz_btn.config(text="■  VIZ OFF", bg=NEON_ORANGE)
+            self.status_label.config(
+                text="[ VIZ ]  1-5 resolución  |  F fullscreen  |  SPACE efecto  |  H ayuda"
+            )
+        except Exception as exc:
+            messagebox.showerror("OpenGL", str(exc))
+
+    def _viz_closed_from_thread(self) -> None:
+        self._viz = None
+        self._viz_bus = None
+        try:
+            self.viz_btn.config(text="◈  VIZ GL", bg=NEON_BLUE)
+            self.status_label.config(text="[ VIZ ]  Cerrada")
+        except tk.TclError:
+            pass
+
     def _animate_scope(self) -> None:
-        self.scope.update_waveform(self.synth.get_scope_buffer())
-        self.spectrum.update_spectrum(self.synth.get_spectrum_buffer())
+        scope = self.synth.get_scope_buffer()
+        spectrum = self.synth.get_spectrum_buffer()
+        self.scope.update_waveform(scope)
+        self.spectrum.update_spectrum(spectrum)
+        bus = self._viz_bus or get_viz_bus()
+        if bus is not None and bus.alive:
+            bus.push(scope, spectrum)
         self.root.after(40, self._animate_scope)
 
     def _bind_keys(self) -> None:
@@ -951,6 +1001,9 @@ class CS80GUI:
         return "break"
 
     def _handle_close(self) -> None:
+        stop_visualizer()
+        self._viz = None
+        self._viz_bus = None
         if self.recorder.recording:
             self.recorder.stop()
         if self.engine.is_running:

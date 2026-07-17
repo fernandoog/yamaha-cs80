@@ -11,9 +11,16 @@ Escrito en **Python 3.10+**, compatible con **Linux** y **Windows**.
 - Efectos: chorus, delay, reverb, bitcrusher
 - Arpegiador y secuenciador de 16 pasos con patrones Blade Runner
 - GUI oscura estilo neón, osciloscopio, analizador espectral, piano virtual
+- Ventana OpenGL aparte con visuales aleatorios estilo Winamp / MilkDrop
 - Grabación y exportación WAV, guardado de presets y sesiones
+- Selector de calidad de audio (Básica → Profesional)
 - Entrada MIDI opcional (pitch bend, mod wheel, aftertouch)
 - 12 presets inspirados en Vangelis / Blade Runner
+
+## Requisitos
+
+- Python 3.10+
+- Windows, Linux o macOS
 
 ## Instalación
 
@@ -45,12 +52,25 @@ python main.py --midi-port "nombre del puerto"
 - **Z–M** — octava baja
 - **Q–I** — octava alta
 
+### Visualizador OpenGL (botón VIZ GL)
+
+- **1–5** — resolución (800×600 · 720p · 1600×900 · 1080p · nativa)
+- **← →** o **R** — ciclar resolución
+- **F** — pantalla completa (cubre todo el monitor)
+- **H** — mostrar / ocultar ayuda
+- **SPACE** — cambiar efecto al azar
+- **ESC** — salir de fullscreen / cerrar
+
+Efectos: spectrum bars, osciloscopio, túnel, plasma, partículas, starfield, flor, grid, anillos.
+
 ## Estructura
 
 ```
 audio_engine.py    Motor de audio (sounddevice)
 synth_voice.py     Voz CS-80 + polifonía + efectos
 gui.py             Interfaz Blade Runner
+gl_visualizer.py   Ventana OpenGL estilo Winamp
+quality.py         Perfiles de calidad de sonido
 presets.py         12 presets
 step_sequencer.py  Secuenciador 16 pasos
 effects.py         Delay, reverb, chorus, bitcrush
