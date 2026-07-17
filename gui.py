@@ -46,6 +46,8 @@ class BladeRunnerScale(tk.Scale):
         frame = tk.Frame(parent, bg=BG_PANEL)
         frame.pack(fill=tk.X, padx=8, pady=2)
         tk.Label(frame, text=label, font=FONT_LABEL, fg=TEXT_DIM, bg=BG_PANEL, width=14, anchor="w").pack(side=tk.LEFT)
+        # takefocus=0: en Windows los Scale capturan el teclado y bloquean las notas
+        kwargs.setdefault("takefocus", 0)
         super().__init__(
             frame, from_=from_, to=to, orient=tk.HORIZONTAL, bg=BG_PANEL, fg=NEON_BLUE,
             troughcolor=NEON_DIM, highlightthickness=0, sliderrelief=tk.FLAT,
@@ -196,15 +198,15 @@ class PianoKeyboard(tk.Frame):
         self._build()
 
     def _build(self) -> None:
-        white_w, white_h, black_w, black_h = 36, 100, 22, 60
+        white_w, white_h, black_w, black_h = 32, 72, 20, 44
         x = 0
         for oct_ in range(self.num_octaves):
             for semi in self.WHITE_KEYS:
                 note = (self.start_octave + oct_) * 12 + semi
                 btn = tk.Button(
                     self, bg=KEY_WHITE, activebackground=KEY_ACTIVE, relief=tk.FLAT,
-                    borderwidth=1, highlightthickness=0, width=2, height=5,
-                    command=lambda n=note: None,
+                    borderwidth=1, highlightthickness=0, width=2, height=3,
+                    takefocus=0, command=lambda n=note: None,
                 )
                 btn.place(x=x, y=0, width=white_w, height=white_h)
                 btn.bind("<ButtonPress-1>", lambda e, n=note: self._press(n))
@@ -217,7 +219,7 @@ class PianoKeyboard(tk.Frame):
                 note = (self.start_octave + oct_) * 12 + semi
                 btn = tk.Button(
                     self, bg=KEY_BLACK, activebackground=KEY_ACTIVE, relief=tk.FLAT,
-                    borderwidth=0, highlightthickness=0, width=1, height=3,
+                    borderwidth=0, highlightthickness=0, width=1, height=2, takefocus=0,
                 )
                 btn.place(x=base_x + off * white_w + white_w - black_w // 2, y=0, width=black_w, height=black_h)
                 btn.bind("<ButtonPress-1>", lambda e, n=note: self._press(n))
@@ -240,9 +242,11 @@ class PianoKeyboard(tk.Frame):
 
 
 class CS80GUI:
+    # keysym en minúsculas (Windows/Linux) + aliases
     KEY_MAP = {
         "z": 48, "s": 49, "x": 50, "d": 51, "c": 52, "v": 53, "g": 54, "b": 55,
-        "h": 56, "n": 57, "j": 58, "m": 59, ",": 60,
+        "h": 56, "n": 57, "j": 58, "m": 59,
+        "comma": 60, "less": 60, ",": 60,
         "q": 60, "2": 61, "w": 62, "3": 63, "e": 64, "r": 65, "5": 66, "t": 67,
         "6": 68, "y": 69, "7": 70, "u": 71, "i": 72,
     }
@@ -262,14 +266,13 @@ class CS80GUI:
         self.engine = engine
         self.recorder = recorder or AudioRecorder(SAMPLE_RATE)
         self.on_close = on_close
-        self._keys_pressed: set[int] = set()
+        self._keys_pressed: set[str] = set()
         self._sliders: dict[str, BladeRunnerScale] = {}
 
         self.root = tk.Tk()
         self.root.title("YAMAHA CS-80  //  BLADE RUNNER SYNTH  v3")
         self.root.configure(bg=BG_DARK)
-        self.root.geometry("980x900")
-        self.root.minsize(920, 820)
+        self._fit_to_screen()
         self.root.protocol("WM_DELETE_WINDOW", self._handle_close)
 
         show_splash(self.root)
@@ -277,34 +280,84 @@ class CS80GUI:
         self._bind_keys()
         self._sync_from_params(self.synth.params)
         self._animate_scope()
+        self.root.after(100, self._focus_root)
+
+    def _fit_to_screen(self) -> None:
+        """Ajusta tamaño a la resolución disponible (deja margen para barra de tareas)."""
+        self.root.update_idletasks()
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        w = min(980, max(720, sw - 40))
+        h = min(820, max(520, sh - 80))
+        x = max(0, (sw - w) // 2)
+        y = max(0, (sh - h) // 2)
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
+        self.root.minsize(640, 480)
+        # Maximizar solo en monitores grandes
+        if sw >= 1400 and sh >= 900:
+            try:
+                self.root.state("zoomed")
+            except tk.TclError:
+                pass
+
+    def _focus_root(self) -> None:
+        try:
+            self.root.focus_force()
+            self.root.lift()
+        except tk.TclError:
+            pass
+
+    def _build_scrollable_tab(self, notebook: ttk.Notebook, title: str) -> tk.Frame:
+        """Pestaña con scroll vertical para pantallas pequeñas."""
+        outer = tk.Frame(notebook, bg=BG_PANEL)
+        notebook.add(outer, text=title)
+        canvas = tk.Canvas(outer, bg=BG_PANEL, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(outer, orient=tk.VERTICAL, command=canvas.yview)
+        inner = tk.Frame(canvas, bg=BG_PANEL)
+        inner.bind(
+            "<Configure>",
+            lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")),
+        )
+        win = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.bind(
+            "<Configure>",
+            lambda e, c=canvas, w=win: c.itemconfigure(w, width=e.width),
+        )
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def _on_mousewheel(event, c=canvas):
+            delta = -1 if event.delta > 0 else 1
+            if hasattr(event, "num") and event.num in (4, 5):
+                delta = -1 if event.num == 4 else 1
+            c.yview_scroll(delta, "units")
+
+        canvas.bind("<Enter>", lambda e, c=canvas: c.bind_all("<MouseWheel>", lambda ev: _on_mousewheel(ev, c)))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        return inner
 
     def _build_ui(self) -> None:
         header = tk.Frame(self.root, bg=BG_DARK)
-        header.pack(fill=tk.X, padx=16, pady=(10, 2))
+        header.pack(fill=tk.X, padx=12, pady=(6, 2))
         tk.Label(header, text="◈  CS-80 SIMULATOR  v3", font=FONT_TITLE, fg=NEON_BLUE, bg=BG_DARK).pack(side=tk.LEFT)
         tk.Label(header, text="NEXUS-6 AUDIO LAB  //  2019", font=FONT_SMALL, fg=NEON_ORANGE, bg=BG_DARK).pack(side=tk.RIGHT)
-        tk.Frame(self.root, bg=NEON_BLUE, height=1).pack(fill=tk.X, padx=16, pady=4)
+        tk.Frame(self.root, bg=NEON_BLUE, height=1).pack(fill=tk.X, padx=12, pady=2)
 
-        self.scope = Oscilloscope(self.root, height=70)
-        self.scope.pack(fill=tk.X, padx=16, pady=(0, 2))
-        self.spectrum = SpectrumAnalyzer(self.root, height=50)
-        self.spectrum.pack(fill=tk.X, padx=16, pady=(0, 6))
+        self.scope = Oscilloscope(self.root, height=48)
+        self.scope.pack(fill=tk.X, padx=12, pady=(0, 2))
+        self.spectrum = SpectrumAnalyzer(self.root, height=36)
+        self.spectrum.pack(fill=tk.X, padx=12, pady=(0, 4))
 
         notebook = ttk.Notebook(self.root)
-        notebook.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=2)
 
-        tab_synth = tk.Frame(notebook, bg=BG_PANEL)
-        tab_layer2 = tk.Frame(notebook, bg=BG_PANEL)
-        tab_fx = tk.Frame(notebook, bg=BG_PANEL)
-        tab_arp = tk.Frame(notebook, bg=BG_PANEL)
-        tab_seq = tk.Frame(notebook, bg=BG_PANEL)
-        tab_misc = tk.Frame(notebook, bg=BG_PANEL)
-        notebook.add(tab_synth, text=" SYNTH ")
-        notebook.add(tab_layer2, text=" LAYER II ")
-        notebook.add(tab_fx, text=" FX ")
-        notebook.add(tab_arp, text=" ARP ")
-        notebook.add(tab_seq, text=" SEQ ")
-        notebook.add(tab_misc, text=" MISC ")
+        tab_synth = self._build_scrollable_tab(notebook, " SYNTH ")
+        tab_layer2 = self._build_scrollable_tab(notebook, " LAYER II ")
+        tab_fx = self._build_scrollable_tab(notebook, " FX ")
+        tab_arp = self._build_scrollable_tab(notebook, " ARP ")
+        tab_seq = self._build_scrollable_tab(notebook, " SEQ ")
+        tab_misc = self._build_scrollable_tab(notebook, " MISC ")
 
         left = tk.Frame(tab_synth, bg=BG_PANEL)
         left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -326,9 +379,13 @@ class CS80GUI:
         self._build_piano(self.root)
 
         self.status_label = tk.Label(
-            self.root, text="[ AUDIO OFF ]", font=FONT_SMALL, fg=TEXT_DIM, bg=BG_DARK,
+            self.root,
+            text="[ AUDIO OFF ]  Z-M / Q-I = teclado  |  START AUDIO primero",
+            font=FONT_SMALL,
+            fg=TEXT_DIM,
+            bg=BG_DARK,
         )
-        self.status_label.pack(fill=tk.X, padx=16, pady=(2, 8))
+        self.status_label.pack(fill=tk.X, padx=12, pady=(2, 6))
 
     def _section_title(self, parent, text: str) -> None:
         tk.Label(parent, text=text, font=FONT_LABEL, fg=NEON_ORANGE, bg=BG_PANEL, anchor="w").pack(fill=tk.X, padx=8, pady=(8, 2))
@@ -496,10 +553,10 @@ class CS80GUI:
 
     def _build_piano(self, parent) -> None:
         frame = tk.Frame(parent, bg=BG_DARK)
-        frame.pack(fill=tk.X, padx=16, pady=4)
-        tk.Label(frame, text="▸ PIANO VIRTUAL", font=FONT_LABEL, fg=NEON_ORANGE, bg=BG_DARK).pack(anchor="w")
+        frame.pack(fill=tk.X, padx=12, pady=2)
+        tk.Label(frame, text="▸ PIANO  (clic o Z-M / Q-I)", font=FONT_LABEL, fg=NEON_ORANGE, bg=BG_DARK).pack(anchor="w")
         self.piano = PianoKeyboard(frame, self._piano_note_on, self._piano_note_off, start_octave=3, num_octaves=2)
-        self.piano.pack(pady=4)
+        self.piano.pack(pady=2)
 
     def _piano_note_on(self, note: int, vel: int) -> None:
         if self.engine.is_running:
@@ -737,24 +794,53 @@ class CS80GUI:
         self.root.after(40, self._animate_scope)
 
     def _bind_keys(self) -> None:
-        self.root.bind("<KeyPress>", self._on_key_down)
-        self.root.bind("<KeyRelease>", self._on_key_up)
+        # bind_all: en Windows los Scale/Combobox capturan el foco y root.bind no llega
+        self.root.bind_all("<KeyPress>", self._on_key_down, add="+")
+        self.root.bind_all("<KeyRelease>", self._on_key_up, add="+")
+        self.root.bind("<Button-1>", lambda e: self.root.focus_set())
 
-    def _on_key_down(self, event: tk.Event) -> None:
-        key = event.keysym.lower()
+    def _resolve_key(self, event: tk.Event) -> Optional[str]:
+        key = (event.keysym or "").lower()
         if key in self.KEY_MAP:
-            note = self.KEY_MAP[key]
-            if note not in self._keys_pressed:
-                self._keys_pressed.add(note)
-                if self.engine.is_running:
-                    self.synth.note_on(note, 100)
+            return key
+        char = (event.char or "").lower()
+        if char in self.KEY_MAP:
+            return char
+        return None
 
-    def _on_key_up(self, event: tk.Event) -> None:
-        key = event.keysym.lower()
-        if key in self.KEY_MAP:
-            note = self.KEY_MAP[key]
-            self._keys_pressed.discard(note)
+    def _on_key_down(self, event: tk.Event) -> Optional[str]:
+        # No interferir si el usuario escribe en un Entry
+        w = event.widget
+        if isinstance(w, (tk.Entry, ttk.Entry, tk.Text)):
+            return None
+        key = self._resolve_key(event)
+        if key is None:
+            return None
+        # Autorepeat de Windows: ignorar KeyPress repetidos de la misma tecla
+        if key in self._keys_pressed:
+            return "break"
+        self._keys_pressed.add(key)
+        note = self.KEY_MAP[key]
+        if self.engine.is_running:
+            self.synth.note_on(note, 100)
+        else:
+            self.status_label.config(text="[!] Pulsa START AUDIO para tocar con el teclado")
+        return "break"
+
+    def _on_key_up(self, event: tk.Event) -> Optional[str]:
+        w = event.widget
+        if isinstance(w, (tk.Entry, ttk.Entry, tk.Text)):
+            return None
+        key = self._resolve_key(event)
+        if key is None:
+            return None
+        self._keys_pressed.discard(key)
+        # Si otra tecla mapea a la misma nota y sigue pulsada, no apagar
+        note = self.KEY_MAP[key]
+        still = any(self.KEY_MAP[k] == note for k in self._keys_pressed)
+        if not still:
             self.synth.note_off(note)
+        return "break"
 
     def _handle_close(self) -> None:
         if self.recorder.recording:
