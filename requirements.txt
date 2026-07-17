@@ -1,0 +1,10 @@
+# Yamaha CS-80 Simulator — Blade Runner Edition
+# Python >= 3.10 recomendado (probado en 3.10+)
+
+numpy>=1.24.0
+scipy>=1.10.0
+sounddevice>=0.4.6
+
+# MIDI opcional
+mido>=1.3.0
+python-rtmidi>=1.5.0
